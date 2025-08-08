@@ -1,5 +1,5 @@
 import React, { useState, useRef } from "react";
-import { Upload, X, RefreshCw, Scissors, Download, Heart } from "lucide-react";
+import { Upload, X, RefreshCw, Scissors, Download } from "lucide-react";
 import OpenAI from "openai";
 
 interface CustomOption {
@@ -481,10 +481,9 @@ function App() {
   const [backgroundTransparent, setBackgroundTransparent] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
-  const [promptText, setPromptText] = useState(
-    "自然な表情の女性のヘアスタイルを生成してください"
-  );
-  const [favorites, setFavorites] = useState<number[]>([]);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingStep, setLoadingStep] = useState("");
+  const [promptText, setPromptText] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -596,9 +595,40 @@ function App() {
       .filter((url): url is string => url !== null && url !== undefined);
   };
 
+  const simulateProgress = (duration: number) => {
+    const steps = [
+      { progress: 10, message: "プロンプトを解析中..." },
+      { progress: 30, message: "AIモデルを準備中..." },
+      { progress: 50, message: "画像生成を開始中..." },
+      { progress: 70, message: "スタイル調整中..." },
+      { progress: 85, message: "最終処理中..." },
+      { progress: 95, message: "画像を保存中..." }
+    ];
+    
+    let currentStep = 0;
+    const stepDuration = duration / steps.length;
+    
+    const interval = setInterval(() => {
+      if (currentStep < steps.length) {
+        setLoadingProgress(steps[currentStep].progress);
+        setLoadingStep(steps[currentStep].message);
+        currentStep++;
+      } else {
+        clearInterval(interval);
+      }
+    }, stepDuration);
+    
+    return interval;
+  };
+
   const handleGenerate = async () => {
     setIsLoading(true);
+    setLoadingProgress(0);
+    setLoadingStep("準備中...");
     setResultImages([]);
+
+    // プログレスバーのシミュレーション開始（30秒想定）
+    const progressInterval = simulateProgress(30000);
 
     try {
       const prompt = generatePrompt();
@@ -609,6 +639,7 @@ function App() {
       // アップロード画像がある場合は編集APIを使用
       if (selectedImageFile) {
         console.log("アップロード画像あり - GPT Image 1 Edit APIを使用");
+        setLoadingStep("アップロード画像を解析中...");
 
         try {
           imageUrls = await editWithGPTImage1(prompt, selectedImageFile);
@@ -618,12 +649,15 @@ function App() {
             "GPT Image 1 Editでエラー、DALL-E 3にフォールバック:",
             editError
           );
-          imageUrls = await generateWithDALLE3(prompt);
-          console.log("DALL-E 3 でフォールバック成功しました");
+          alert("画像の生成に失敗しました。");
+          throw new Error("GPT Image 1 Editでエラー、DALL-E 3にフォールバック");
+          // imageUrls = await generateWithDALLE3(prompt);
+          // console.log("DALL-E 3 でフォールバック成功しました");
         }
       } else {
         // アップロード画像がない場合は通常の生成
         console.log("アップロード画像なし - GPT Image 1 Generate APIを使用");
+        setLoadingStep("新しい画像を生成中...");
 
         try {
           const openai = getOpenAIClient();
@@ -680,7 +714,15 @@ function App() {
         }
       }
 
-      setResultImages(imageUrls);
+      // プログレス完了
+      clearInterval(progressInterval);
+      setLoadingProgress(100);
+      setLoadingStep("完了！");
+      
+      // 少し待ってから結果を表示
+      setTimeout(() => {
+        setResultImages(imageUrls);
+      }, 500);
     } catch (error) {
       console.error("Image generation failed:", error);
 
@@ -712,16 +754,11 @@ function App() {
       }
 
       alert(errorMessage);
+      clearInterval(progressInterval);
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const toggleFavorite = (index: number) => {
-    if (favorites.includes(index)) {
-      setFavorites(favorites.filter((i) => i !== index));
-    } else {
-      setFavorites([...favorites, index]);
+      setLoadingProgress(0);
+      setLoadingStep("");
     }
   };
 
@@ -1087,17 +1124,6 @@ function App() {
                   <h3 className="text-md font-semibold text-gray-800">
                     画像生成設定 (GPT Image 1)
                   </h3>
-                  <div
-                    className="text-sm px-2 py-1 rounded-full"
-                    style={{
-                      backgroundColor: selectedImageFile
-                        ? "#dcfce7"
-                        : "#fef3c7",
-                      color: selectedImageFile ? "#166534" : "#92400e",
-                    }}
-                  >
-                    {selectedImageFile ? "編集モード" : "新規生成モード"}
-                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -1189,20 +1215,39 @@ function App() {
 
           {/* 右側 - 生成結果表示エリア */}
           <div className="w-full md:w-1/2">
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 sticky top-0">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 sticky top-7">
               <h2 className="text-lg font-semibold text-gray-800 border-b border-gray-100 pb-3 mb-6">
                 生成されたヘアスタイル
               </h2>
 
               {isLoading ? (
                 <div className="flex items-center justify-center h-64">
-                  <div className="text-center">
+                  <div className="text-center w-full max-w-md mx-auto">
                     <RefreshCw className="w-10 h-10 mx-auto animate-spin text-pink-500 mb-4" />
-                    <p className="text-gray-500">ヘアスタイル生成中...</p>
+                    
+                    {/* プログレスバー */}
+                    <div className="mb-4">
+                      <div className="flex justify-between items-center mb-2">
+                        <p className="text-gray-700 font-medium text-sm">{loadingStep}</p>
+                        <span className="text-sm text-gray-500">{loadingProgress}%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="bg-gradient-to-r from-pink-500 to-purple-500 h-2 rounded-full transition-all duration-500 ease-out"
+                          style={{ width: `${loadingProgress}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                    
+                    <p className="text-gray-500 text-sm">
+                      高品質な画像を生成しています...
+                      <br />
+                      しばらくお待ちください
+                    </p>
                   </div>
                 </div>
               ) : resultImages.length > 0 ? (
-                <div className="grid grid-cols-2 gap-8">
+                <div className="space-y-6">
                   {resultImages.map((image, index) => (
                     <div
                       key={index}
@@ -1213,27 +1258,22 @@ function App() {
                         alt={`Generated result ${index + 1}`}
                         className="w-full aspect-square object-cover"
                       />
-                      <div className="absolute top-2 right-2">
-                        <button
-                          className={`p-2 rounded-full ${
-                            favorites.includes(index)
-                              ? "bg-pink-500 text-white"
-                              : "bg-white text-gray-700"
-                          } shadow-md`}
-                          onClick={() => toggleFavorite(index)}
-                        >
-                          <Heart
-                            className="w-4 h-4"
-                            fill={favorites.includes(index) ? "white" : "none"}
-                          />
-                        </button>
-                      </div>
                       <div className="p-3 bg-white border-t border-gray-100">
                         <div className="flex justify-between items-center">
                           <p className="text-sm font-medium text-gray-800">
                             スタイル #{index + 1}
                           </p>
-                          <button className="text-pink-500 hover:text-pink-600 flex items-center text-sm">
+                          <button
+                            className="text-pink-500 hover:text-pink-600 flex items-center text-sm"
+                            onClick={() => {
+                              const link = document.createElement("a");
+                              link.href = image;
+                              link.download = `hairstyle-${index + 1}.png`;
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                            }}
+                          >
                             <Download className="w-4 h-4 mr-1" />
                             保存
                           </button>

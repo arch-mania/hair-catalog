@@ -1,10 +1,50 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef } from "react";
 import { Upload, X, RefreshCw, Scissors, Download, Heart } from "lucide-react";
 import OpenAI from "openai";
 
 interface CustomOption {
   value: string;
   label: string;
+}
+
+interface BadgeSelectionProps {
+  label: string;
+  options: CustomOption[];
+  selectedValue: string;
+  onSelect: (value: string) => void;
+}
+
+interface GPTImageEditParams {
+  model: string;
+  image: File;
+  prompt: string;
+  n: number;
+  size:
+    | "1024x1024"
+    | "auto"
+    | "256x256"
+    | "512x512"
+    | "1536x1024"
+    | "1024x1536";
+  quality: "high" | "auto" | "standard" | "low" | "medium";
+  background?: "transparent" | "opaque" | "auto";
+}
+
+interface GPTImageGenerateParams {
+  model: string;
+  prompt: string;
+  n: number;
+  size:
+    | "1024x1024"
+    | "auto"
+    | "256x256"
+    | "512x512"
+    | "1536x1024"
+    | "1024x1536"
+    | "1792x1024"
+    | "1024x1792";
+  quality: "high" | "auto" | "standard" | "low" | "medium" | "hd";
+  background?: "transparent" | "opaque" | "auto";
 }
 
 interface ColorData {
@@ -40,14 +80,19 @@ const silhouetteOptions: CustomOption[] = [
   { value: "Diamond-shaped hairstyle", label: "ひし形" },
   { value: "volume at the top and narrow at the bottom", label: "逆三角形" },
   { value: "creating a curvy silhouette", label: "くびれ" },
-  { value: "Forward-angled bob with longer front pieces and shorter back", label: "前下がり" },
-  { value: "Reverse-angled bob with shorter front and longer back", label: "前上がり" },
+  {
+    value: "Forward-angled bob with longer front pieces and shorter back",
+    label: "前下がり",
+  },
+  {
+    value: "Reverse-angled bob with shorter front and longer back",
+    label: "前上がり",
+  },
   { value: "Rounded silhouette", label: "丸みシルエット" },
 ];
 
 // パーマ
 const permOptions: CustomOption[] = [
-  { value: "", label: "指定なし" },
   { value: "perm hair", label: "あり" },
   { value: "", label: "なし" },
 ];
@@ -92,9 +137,18 @@ const hairQualityOptions: CustomOption[] = [
 const layerOptions: CustomOption[] = [
   { value: "", label: "指定なし" },
   { value: "one-length cut with no layers", label: "ワンレングス（段無し）" },
-  { value: "low layers around the bottom", label: "ローレイヤー（低い位置に段）" },
-  { value: "medium layers for natural movement", label: "ミディアムレイヤー（中間位置に段）" },
-  { value: "layering from the top for lightness", label: "ハイレイヤー（高い位置に段）" },
+  {
+    value: "low layers around the bottom",
+    label: "ローレイヤー（低い位置に段）",
+  },
+  {
+    value: "medium layers for natural movement",
+    label: "ミディアムレイヤー（中間位置に段）",
+  },
+  {
+    value: "layering from the top for lightness",
+    label: "ハイレイヤー（高い位置に段）",
+  },
   { value: "uniform layers throughout", label: "セイムレイヤー（均等に段）" },
 ];
 
@@ -105,9 +159,6 @@ const lightingOptions: CustomOption[] = [
   { value: "side lighting", label: "サイド光" },
   { value: "light coming from above", label: "トップ光" },
 ];
-
-
-
 
 // 髪型カテゴリー（コメントアウト - 現在未使用）
 // const hairCategories = [
@@ -347,20 +398,63 @@ const bleachBaseColors: ColorChart = {
   },
 };
 
+// Badge Selection Component
+const BadgeSelection: React.FC<BadgeSelectionProps> = ({
+  label,
+  options,
+  selectedValue,
+  onSelect,
+}) => {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-3">
+        {label}
+      </label>
+      <div className="flex flex-wrap gap-2">
+        {options.map((option) => {
+          const isSelected = selectedValue === option.value;
+          const isDefault = option.value === "";
+
+          return (
+            <button
+              key={option.value}
+              onClick={() => onSelect(option.value)}
+              className={`px-3 py-2 rounded-full text-sm font-medium transition-all duration-200 border ${
+                isSelected
+                  ? isDefault
+                    ? "bg-gray-100 text-gray-700 border-gray-300 ring-2 ring-gray-400"
+                    : "bg-gradient-to-r from-pink-500 to-purple-500 text-white border-transparent shadow-md"
+                  : isDefault
+                  ? "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
+                  : "bg-white text-gray-700 border-gray-200 hover:border-pink-300 hover:bg-pink-50 hover:text-pink-700"
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 // OpenAI 設定
 const getOpenAIClient = () => {
-  const apiKey = import.meta.env.VITE_GPT_KEY || import.meta.env.VITE_OPENAI_API_KEY;
-  
+  const apiKey =
+    import.meta.env.VITE_GPT_KEY || import.meta.env.VITE_OPENAI_API_KEY;
+
   if (!apiKey) {
-    throw new Error('OpenAI APIキーが設定されていません。.envファイルを確認してください。');
+    throw new Error(
+      "OpenAI APIキーが設定されていません。.envファイルを確認してください。"
+    );
   }
-  
-  console.log('API Key found:', apiKey.substring(0, 10) + '...');
-  
+
+  console.log("API Key found:", apiKey.substring(0, 10) + "...");
+
   return new OpenAI({
     apiKey: apiKey,
     dangerouslyAllowBrowser: true,
-    baseURL: 'https://api.openai.com/v1'
+    baseURL: "https://api.openai.com/v1",
   });
 };
 
@@ -370,56 +464,35 @@ function App() {
   const [resultImages, setResultImages] = useState<string[]>([]);
   const [isBlackBase, setIsBlackBase] = useState(true); // 黒髪ベースかブリーチベースかのトグル
   const [selectedColorCode, setSelectedColorCode] = useState<string>(""); // 選択されたカラーコード
-  
+
   // 8つの新しいカテゴリーの状態
   const [hairLength, setHairLength] = useState("");
   const [silhouette, setSilhouette] = useState("");
-  const [perm, setPerm] = useState("");
+  const [perm, setPerm] = useState(""); // デフォルト: なし
   const [hairMovement, setHairMovement] = useState("");
   const [texture, setTexture] = useState("");
   const [hairQuality, setHairQuality] = useState("");
   const [layers, setLayers] = useState("");
   const [lighting, setLighting] = useState("");
-  
+
   // GPT Image 1新パラメータ
   const [imageQuality, setImageQuality] = useState("high");
   const [imageSize, setImageSize] = useState("1024x1024");
   const [backgroundTransparent, setBackgroundTransparent] = useState(false);
-  
+
   const [isLoading, setIsLoading] = useState(false);
-  const [promptText, setPromptText] =
-    useState("自然な表情の女性のヘアスタイルを生成してください");
+  const [promptText, setPromptText] = useState(
+    "自然な表情の女性のヘアスタイルを生成してください"
+  );
   const [favorites, setFavorites] = useState<number[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // デバッグ用: APIキーをテスト
-  const testAPIKey = () => {
-    try {
-      const openai = getOpenAIClient();
-      console.log('OpenAI client created successfully');
-      
-      // 環境変数の確認
-      console.log('Environment variables:', {
-        VITE_GPT_KEY: import.meta.env.VITE_GPT_KEY ? '設定されています' : '未設定',
-        VITE_OPENAI_API_KEY: import.meta.env.VITE_OPENAI_API_KEY ? '設定されています' : '未設定'
-      });
-    } catch (error) {
-      console.error('API Key test failed:', error);
-    }
-  };
-
-  // コンポーネントマウント時にAPIキーをテスト
-  useEffect(() => {
-    testAPIKey();
-  }, []);
-
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       // Fileオブジェクトを保存（API用）
       setSelectedImageFile(file);
-      
+
       // 表示用URLを作成
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -432,7 +505,7 @@ function App() {
   // プロンプト生成関数
   const generatePrompt = () => {
     const styleParts = [];
-    
+
     // 選択されたオプションのみを使用
     if (hairLength) styleParts.push(hairLength);
     if (silhouette) styleParts.push(silhouette);
@@ -442,45 +515,56 @@ function App() {
     if (hairQuality) styleParts.push(hairQuality);
     if (layers) styleParts.push(layers);
     if (lighting) styleParts.push(lighting);
-    
+
     let prompt = "make her hairstyle ";
-    
+
     // 選択されたオプションを結合（空の値はスキップ）
-    prompt += styleParts.join(",");
-    
+    if (styleParts.length > 0) {
+      prompt += styleParts.join(",");
+    }
+
     // 髪色が選択されている場合は追加
     if (selectedColorCode) {
       prompt += ` with hair color ${selectedColorCode}`;
     }
-    
+
+    // ユーザーが入力したスタイルの説明を追加
+    if (promptText.trim()) {
+      prompt += `. Additional style description: ${promptText.trim()}`;
+    }
+
     return prompt;
   };
-
-
 
   // GPT Image 1で画像編集
   const editWithGPTImage1 = async (prompt: string, imageFile: File) => {
     const openai = getOpenAIClient();
-    
-    const editParams: any = {
+
+    const editParams: GPTImageEditParams = {
       model: "gpt-image-1",
       image: imageFile,
       prompt: prompt,
-      n: 4,
-      size: imageSize,
-      quality: imageQuality
+      n: 1,
+      size: imageSize as
+        | "1024x1024"
+        | "auto"
+        | "256x256"
+        | "512x512"
+        | "1536x1024"
+        | "1024x1536",
+      quality: imageQuality as "high" | "auto" | "standard" | "low" | "medium",
     };
-    
+
     if (backgroundTransparent) {
       editParams.background = "transparent";
     }
-    
+
     const response = await openai.images.edit(editParams);
-    
+
     // Base64データをデータ URLに変換
-    return response.data
-      .filter(item => item.b64_json || item.url)
-      .map(item => {
+    return (response.data || [])
+      .filter((item) => item.b64_json || item.url)
+      .map((item) => {
         if (item.b64_json) {
           return `data:image/png;base64,${item.b64_json}`;
         } else if (item.url) {
@@ -488,24 +572,28 @@ function App() {
         }
         return null;
       })
-      .filter(url => url !== null) as string[];
+      .filter((url) => url !== null) as string[];
   };
 
   // DALL-E 3でフォールバック生成
   const generateWithDALLE3 = async (prompt: string) => {
     const openai = getOpenAIClient();
-    const imagePromises = Array(4).fill(null).map(() => 
-      openai.images.generate({
-        model: "dall-e-3",
-        prompt: prompt,
-        n: 1,
-        size: "1024x1024",
-        quality: "standard"
-      })
-    );
-    
+    const imagePromises = Array(1)
+      .fill(null)
+      .map(() =>
+        openai.images.generate({
+          model: "dall-e-3",
+          prompt: prompt,
+          n: 1,
+          size: "1024x1024",
+          quality: "standard",
+        })
+      );
+
     const responses = await Promise.all(imagePromises);
-    return responses.map(response => response.data[0]?.url).filter(url => url !== null);
+    return responses
+      .map((response) => response.data?.[0]?.url)
+      .filter((url): url is string => url !== null && url !== undefined);
   };
 
   const handleGenerate = async () => {
@@ -515,46 +603,63 @@ function App() {
     try {
       const prompt = generatePrompt();
       console.log("Generated prompt:", prompt);
-      
+
       let imageUrls: string[] = [];
-      
+
       // アップロード画像がある場合は編集APIを使用
       if (selectedImageFile) {
-        console.log('アップロード画像あり - GPT Image 1 Edit APIを使用');
-        
+        console.log("アップロード画像あり - GPT Image 1 Edit APIを使用");
+
         try {
           imageUrls = await editWithGPTImage1(prompt, selectedImageFile);
-          console.log('GPT Image 1 Edit で成功しました');
+          console.log("GPT Image 1 Edit で成功しました");
         } catch (editError) {
-          console.warn('GPT Image 1 Editでエラー、DALL-E 3にフォールバック:', editError);
+          console.warn(
+            "GPT Image 1 Editでエラー、DALL-E 3にフォールバック:",
+            editError
+          );
           imageUrls = await generateWithDALLE3(prompt);
-          console.log('DALL-E 3 でフォールバック成功しました');
+          console.log("DALL-E 3 でフォールバック成功しました");
         }
       } else {
         // アップロード画像がない場合は通常の生成
-        console.log('アップロード画像なし - GPT Image 1 Generate APIを使用');
-        
+        console.log("アップロード画像なし - GPT Image 1 Generate APIを使用");
+
         try {
           const openai = getOpenAIClient();
-          
-          const imageParams: any = {
+
+          const imageParams: GPTImageGenerateParams = {
             model: "gpt-image-1",
             prompt: prompt,
             n: 4,
-            size: imageSize,
-            quality: imageQuality
+            size: imageSize as
+              | "1024x1024"
+              | "auto"
+              | "256x256"
+              | "512x512"
+              | "1536x1024"
+              | "1024x1536"
+              | "1792x1024"
+              | "1024x1792",
+            quality: imageQuality as
+              | "high"
+              | "auto"
+              | "standard"
+              | "low"
+              | "medium"
+              | "hd",
           };
-          
+
           if (backgroundTransparent) {
             imageParams.background = "transparent";
           }
-          
+
           const response = await openai.images.generate(imageParams);
-          
+
           // Base64データをデータ URLに変換
-          imageUrls = response.data
-            .filter(item => item.b64_json || item.url)
-            .map(item => {
+          imageUrls = (response.data || [])
+            .filter((item) => item.b64_json || item.url)
+            .map((item) => {
               if (item.b64_json) {
                 return `data:image/png;base64,${item.b64_json}`;
               } else if (item.url) {
@@ -562,41 +667,50 @@ function App() {
               }
               return null;
             })
-            .filter(url => url !== null) as string[];
-            
-          console.log('GPT Image 1 Generate で成功しました');
-          
+            .filter((url) => url !== null) as string[];
+
+          console.log("GPT Image 1 Generate で成功しました");
         } catch (generateError) {
-          console.warn('GPT Image 1 Generateでエラー、DALL-E 3にフォールバック:', generateError);
+          console.warn(
+            "GPT Image 1 Generateでエラー、DALL-E 3にフォールバック:",
+            generateError
+          );
           imageUrls = await generateWithDALLE3(prompt);
-          console.log('DALL-E 3 でフォールバック成功しました');
+          console.log("DALL-E 3 でフォールバック成功しました");
         }
       }
-      
+
       setResultImages(imageUrls);
     } catch (error) {
       console.error("Image generation failed:", error);
-      
+
       let errorMessage = "画像の生成に失敗しました。";
-      
+
       if (error instanceof Error) {
-        if (error.message.includes('APIキー')) {
-          errorMessage += "\n\nAPIキーが設定されていません。.envファイルを確認してください。";
-        } else if (error.message.includes('401')) {
-          errorMessage += "\n\nAPIキーが無効です。OpenAIのダッシュボードで確認してください。";
-        } else if (error.message.includes('429')) {
-          errorMessage += "\n\nAPIリクエストの制限に達しました。少し待ってから再度お試しください。";
-        } else if (error.message.includes('insufficient_quota')) {
+        if (error.message.includes("APIキー")) {
+          errorMessage +=
+            "\n\nAPIキーが設定されていません。.envファイルを確認してください。";
+        } else if (error.message.includes("401")) {
+          errorMessage +=
+            "\n\nAPIキーが無効です。OpenAIのダッシュボードで確認してください。";
+        } else if (error.message.includes("429")) {
+          errorMessage +=
+            "\n\nAPIリクエストの制限に達しました。少し待ってから再度お試しください。";
+        } else if (error.message.includes("insufficient_quota")) {
           errorMessage += "\n\nOpenAIアカウントのクレジットが不足しています。";
-        } else if (error.message.includes('gpt-image-1')) {
-          errorMessage += "\n\nGPT Image 1モデルが利用できません。DALL-E 3にフォールバックします。";
-        } else if (error.message.includes('Unknown parameter')) {
-          errorMessage += "\n\nパラメーターエラー: " + error.message + "\n\nDALL-E 3にフォールバックします。";
+        } else if (error.message.includes("gpt-image-1")) {
+          errorMessage +=
+            "\n\nGPT Image 1モデルが利用できません。DALL-E 3にフォールバックします。";
+        } else if (error.message.includes("Unknown parameter")) {
+          errorMessage +=
+            "\n\nパラメーターエラー: " +
+            error.message +
+            "\n\nDALL-E 3にフォールバックします。";
         } else {
           errorMessage += "\n\nエラー詳細: " + error.message;
         }
       }
-      
+
       alert(errorMessage);
     } finally {
       setIsLoading(false);
@@ -673,7 +787,7 @@ function App() {
     };
 
     return (
-      <div className="bg-white border border-gray-300 rounded-lg overflow-hidden shadow-sm">
+      <div className="bg-white border border-gray-300 rounded-lg overflow-hidden shadow-sm min-w-[1000px]">
         {/* ヘッダー行 */}
         <div className="flex bg-gray-100 border-b-2 border-gray-300">
           <div className="w-6 p-2 text-center text-xs font-bold text-gray-700 border-r border-gray-300 flex items-center justify-center">
@@ -754,7 +868,7 @@ function App() {
   return (
     <div className="min-h-screen bg-white text-gray-800">
       {/* ヘッダー */}
-      <header className="bg-white shadow-sm border-b border-gray-100 py-4 px-6">
+      {/* <header className="bg-white shadow-sm border-b border-gray-100 py-4 px-6">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex items-center space-x-2">
             <Scissors className="w-6 h-6 text-pink-500" />
@@ -763,10 +877,10 @@ function App() {
             </h1>
           </div>
         </div>
-      </header>
+      </header> */}
 
       {/* カテゴリーナビゲーション */}
-      <div className="bg-gray-50 py-3 px-6 border-b border-gray-100">
+      <div className="bg-gray-50 px-6 border-b border-gray-100">
         <div className="max-w-7xl mx-auto overflow-x-auto">
           {/* <div className="flex space-x-4">
             {hairCategories.map((category) => (
@@ -787,7 +901,7 @@ function App() {
       </div>
 
       {/* メインコンテンツ */}
-      <div className="max-w-10xl mx-auto py-8 px-6">
+      <div className="max-w-10xl mx-auto py-8 px-2">
         <div className="flex flex-col md:flex-row gap-8">
           {/* 左側 - プロンプト入力エリア */}
           <div className="w-full md:w-2/3 space-y-6">
@@ -842,11 +956,13 @@ function App() {
                         選択中:{" "}
                       </span>
                       <div className="flex items-center gap-2">
-                        <div 
-                          className="w-4 h-4 rounded border border-gray-300" 
+                        <div
+                          className="w-4 h-4 rounded border border-gray-300"
                           style={{ backgroundColor: selectedColorCode }}
                         ></div>
-                        <span className="text-pink-700">{selectedColorCode}</span>
+                        <span className="text-pink-700">
+                          {selectedColorCode}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -857,167 +973,68 @@ function App() {
               </div>
 
               {/* 髪の長さ選択 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  髪の長さ
-                </label>
-                <select
-                  className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
-                  value={hairLength}
-                  onChange={(e) => setHairLength(e.target.value)}
-                >
-                  {hairLengthOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <BadgeSelection
+                label="髪の長さ"
+                options={hairLengthOptions}
+                selectedValue={hairLength}
+                onSelect={setHairLength}
+              />
 
               {/* シルエット選択 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  シルエット
-                </label>
-                <select
-                  className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
-                  value={silhouette}
-                  onChange={(e) => setSilhouette(e.target.value)}
-                >
-                  {silhouetteOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <BadgeSelection
+                label="シルエット"
+                options={silhouetteOptions}
+                selectedValue={silhouette}
+                onSelect={setSilhouette}
+              />
 
               {/* パーマ選択 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  パーマ
-                </label>
-                <select
-                  className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
-                  value={perm}
-                  onChange={(e) => setPerm(e.target.value)}
-                >
-                  {permOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <BadgeSelection
+                label="パーマ"
+                options={permOptions}
+                selectedValue={perm}
+                onSelect={setPerm}
+              />
 
               {/* 髪の動き選択 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  髪の動き
-                </label>
-                <select
-                  className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
-                  value={hairMovement}
-                  onChange={(e) => setHairMovement(e.target.value)}
-                >
-                  {hairMovementOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <BadgeSelection
+                label="髪の動き"
+                options={hairMovementOptions}
+                selectedValue={hairMovement}
+                onSelect={setHairMovement}
+              />
 
               {/* 質感選択 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  質感
-                </label>
-                <select
-                  className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
-                  value={texture}
-                  onChange={(e) => setTexture(e.target.value)}
-                >
-                  {textureOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <BadgeSelection
+                label="質感"
+                options={textureOptions}
+                selectedValue={texture}
+                onSelect={setTexture}
+              />
 
               {/* 髪質選択 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  髪質
-                </label>
-                <select
-                  className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
-                  value={hairQuality}
-                  onChange={(e) => setHairQuality(e.target.value)}
-                >
-                  {hairQualityOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <BadgeSelection
+                label="髪質"
+                options={hairQualityOptions}
+                selectedValue={hairQuality}
+                onSelect={setHairQuality}
+              />
 
               {/* レイヤーの構成選択 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  レイヤーの構成
-                </label>
-                <select
-                  className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
-                  value={layers}
-                  onChange={(e) => setLayers(e.target.value)}
-                >
-                  {layerOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 髪の長さ選択 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  髪の長さ
-                </label>
-                <select
-                  className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
-                  value={hairLength}
-                  onChange={(e) => setHairLength(e.target.value)}
-                >
-                  {hairLengthOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <BadgeSelection
+                label="レイヤーの構成"
+                options={layerOptions}
+                selectedValue={layers}
+                onSelect={setLayers}
+              />
 
               {/* 光の選択 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  光
-                </label>
-                <select
-                  className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
-                  value={lighting}
-                  onChange={(e) => setLighting(e.target.value)}
-                >
-                  {lightingOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
+              <BadgeSelection
+                label="光"
+                options={lightingOptions}
+                selectedValue={lighting}
+                onSelect={setLighting}
+              />
 
               {/* 画像アップロード */}
               <div>
@@ -1064,19 +1081,25 @@ function App() {
                 </div>
               </div>
 
-
               {/* GPT Image 1 設定 */}
               <div className="border-t pt-4">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-md font-semibold text-gray-800">画像生成設定 (GPT Image 1)</h3>
-                  <div className="text-sm px-2 py-1 rounded-full" style={{
-                    backgroundColor: selectedImageFile ? '#dcfce7' : '#fef3c7',
-                    color: selectedImageFile ? '#166534' : '#92400e'
-                  }}>
-                    {selectedImageFile ? '編集モード' : '新規生成モード'}
+                  <h3 className="text-md font-semibold text-gray-800">
+                    画像生成設定 (GPT Image 1)
+                  </h3>
+                  <div
+                    className="text-sm px-2 py-1 rounded-full"
+                    style={{
+                      backgroundColor: selectedImageFile
+                        ? "#dcfce7"
+                        : "#fef3c7",
+                      color: selectedImageFile ? "#166534" : "#92400e",
+                    }}
+                  >
+                    {selectedImageFile ? "編集モード" : "新規生成モード"}
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-2 gap-4">
                   {/* 画像品質 */}
                   <div>
@@ -1088,9 +1111,9 @@ function App() {
                       value={imageQuality}
                       onChange={(e) => setImageQuality(e.target.value)}
                     >
-                      <option value="low">低 (Low) - 高速・低コスト</option>
-                      <option value="medium">中 (Medium) - バランス型</option>
-                      <option value="high">高 (High) - 高品質</option>
+                      <option value="low">低品質</option>
+                      <option value="medium">中品質</option>
+                      <option value="high">高品質</option>
                     </select>
                   </div>
 
@@ -1104,9 +1127,9 @@ function App() {
                       value={imageSize}
                       onChange={(e) => setImageSize(e.target.value)}
                     >
-                      <option value="1024x1024">正方形 (1024x1024)</option>
-                      <option value="1024x1536">縦長 (1024x1536)</option>
-                      <option value="1536x1024">横長 (1536x1024)</option>
+                      <option value="1024x1024">正方形</option>
+                      <option value="1024x1536">縦長</option>
+                      <option value="1536x1024">横長</option>
                     </select>
                   </div>
                 </div>
@@ -1118,9 +1141,13 @@ function App() {
                       type="checkbox"
                       className="rounded border-gray-300 text-pink-500 focus:ring-pink-500"
                       checked={backgroundTransparent}
-                      onChange={(e) => setBackgroundTransparent(e.target.checked)}
+                      onChange={(e) =>
+                        setBackgroundTransparent(e.target.checked)
+                      }
                     />
-                    <span className="ml-2 text-sm text-gray-700">背景を透明にする (PNG形式)</span>
+                    <span className="ml-2 text-sm text-gray-700">
+                      背景を透明にする (PNG形式)
+                    </span>
                   </label>
                 </div>
               </div>
@@ -1137,15 +1164,6 @@ function App() {
                   onChange={(e) => setPromptText(e.target.value)}
                 />
               </div>
-
-              {/* デバッグボタン */}
-              <button
-                className="w-full py-2 mb-2 rounded-lg bg-gray-500 text-white text-sm"
-                onClick={testAPIKey}
-                type="button"
-              >
-                APIキーテスト (コンソールを確認)
-              </button>
 
               {/* メインボタン */}
               <button
@@ -1171,7 +1189,7 @@ function App() {
 
           {/* 右側 - 生成結果表示エリア */}
           <div className="w-full md:w-1/2">
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 sticky top-0">
               <h2 className="text-lg font-semibold text-gray-800 border-b border-gray-100 pb-3 mb-6">
                 生成されたヘアスタイル
               </h2>
@@ -1228,11 +1246,9 @@ function App() {
                 <div className="flex items-center justify-center h-64 bg-gray-50 rounded-lg border border-gray-100">
                   <div className="text-center p-6">
                     <Scissors className="w-6 h-12 mx-auto text-gray-300 mb-4" />
-                    <p className="text-gray-500 mb-2">
-                      ヘアスタイルをまだ生成していません
-                    </p>
+                    <p className="text-gray-500 mb-2">ヘアスタイル未作成</p>
                     <p className="text-gray-400 text-sm">
-                      左側のフォームを入力して「ヘアスタイルを生成」ボタンをクリックしてください
+                      フォームを入力して「ヘアスタイルを生成」ボタンをクリックしてください
                     </p>
                   </div>
                 </div>

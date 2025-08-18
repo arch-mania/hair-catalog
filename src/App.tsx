@@ -1,6 +1,13 @@
 import React, { useState, useRef } from "react";
 import { Upload, X, RefreshCw, Scissors, Download } from "lucide-react";
 import OpenAI from "openai";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface CustomOption {
   value: string;
@@ -19,6 +26,7 @@ interface GPTImageEditParams {
   image: File;
   prompt: string;
   n: number;
+  input_fidelity: "high" | "low";
   size:
     | "1024x1024"
     | "auto"
@@ -477,7 +485,7 @@ function App() {
 
   // GPT Image 1新パラメータ
   const [imageQuality, setImageQuality] = useState("high");
-  const [imageSize, setImageSize] = useState("1024x1024");
+  const [imageSize, setImageSize] = useState("1024x1536");
   const [backgroundTransparent, setBackgroundTransparent] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
@@ -515,7 +523,7 @@ function App() {
     if (layers) styleParts.push(layers);
     if (lighting) styleParts.push(lighting);
 
-    let prompt = "make her hairstyle ";
+    let prompt = "make her or him hairstyle ";
 
     // 選択されたオプションを結合（空の値はスキップ）
     if (styleParts.length > 0) {
@@ -526,6 +534,10 @@ function App() {
     if (selectedColorCode) {
       prompt += ` with hair color ${selectedColorCode}`;
     }
+
+    // ヘアカタログ用の髪の毛可視性指示を追加
+    // prompt +=
+    //   ". Hair must be fully visible and clearly displayed. Do not cover hair with hats, scarves, or any accessories. Show the complete hairstyle from front view with good lighting. Focus on showcasing the hair texture, color, and styling details clearly for a hair catalogInclude the full head and hair within the frame";
 
     // ユーザーが入力したスタイルの説明を追加
     if (promptText.trim()) {
@@ -544,6 +556,7 @@ function App() {
       image: imageFile,
       prompt: prompt,
       n: 1,
+      input_fidelity: "high",
       size: imageSize as
         | "1024x1024"
         | "auto"
@@ -598,16 +611,16 @@ function App() {
   const simulateProgress = (duration: number) => {
     const steps = [
       { progress: 10, message: "プロンプトを解析中..." },
-      { progress: 30, message: "AIモデルを準備中..." },
-      { progress: 50, message: "画像生成を開始中..." },
-      { progress: 70, message: "スタイル調整中..." },
-      { progress: 85, message: "最終処理中..." },
-      { progress: 95, message: "画像を保存中..." }
+      { progress: 20, message: "AIモデルを準備中..." },
+      { progress: 30, message: "画像生成を開始中..." },
+      { progress: 40, message: "スタイル調整中..." },
+      { progress: 50, message: "最終処理中..." },
+      { progress: 60, message: "画像を保存中..." },
     ];
-    
+
     let currentStep = 0;
     const stepDuration = duration / steps.length;
-    
+
     const interval = setInterval(() => {
       if (currentStep < steps.length) {
         setLoadingProgress(steps[currentStep].progress);
@@ -617,7 +630,7 @@ function App() {
         clearInterval(interval);
       }
     }, stepDuration);
-    
+
     return interval;
   };
 
@@ -718,7 +731,7 @@ function App() {
       clearInterval(progressInterval);
       setLoadingProgress(100);
       setLoadingStep("完了！");
-      
+
       // 少し待ってから結果を表示
       setTimeout(() => {
         setResultImages(imageUrls);
@@ -1132,15 +1145,19 @@ function App() {
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       品質
                     </label>
-                    <select
-                      className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
+                    <Select
                       value={imageQuality}
-                      onChange={(e) => setImageQuality(e.target.value)}
+                      onValueChange={setImageQuality}
                     >
-                      <option value="low">低品質</option>
-                      <option value="medium">中品質</option>
-                      <option value="high">高品質</option>
-                    </select>
+                      <SelectTrigger className="w-full bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500">
+                        <SelectValue placeholder="品質を選択" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="low">低品質</SelectItem>
+                        <SelectItem value="medium">中品質</SelectItem>
+                        <SelectItem value="high">高品質</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   {/* 画像サイズ */}
@@ -1148,15 +1165,16 @@ function App() {
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       サイズ
                     </label>
-                    <select
-                      className="w-full rounded-lg bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500"
-                      value={imageSize}
-                      onChange={(e) => setImageSize(e.target.value)}
-                    >
-                      <option value="1024x1024">正方形</option>
-                      <option value="1024x1536">縦長</option>
-                      <option value="1536x1024">横長</option>
-                    </select>
+                    <Select value={imageSize} onValueChange={setImageSize}>
+                      <SelectTrigger className="w-full bg-gray-50 border border-gray-200 text-gray-700 shadow-sm focus:ring-pink-500 focus:border-pink-500">
+                        <SelectValue placeholder="サイズを選択" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1024x1024">正方形</SelectItem>
+                        <SelectItem value="1024x1536">縦長</SelectItem>
+                        <SelectItem value="1536x1024">横長</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
 
@@ -1224,21 +1242,25 @@ function App() {
                 <div className="flex items-center justify-center h-64">
                   <div className="text-center w-full max-w-md mx-auto">
                     <RefreshCw className="w-10 h-10 mx-auto animate-spin text-pink-500 mb-4" />
-                    
+
                     {/* プログレスバー */}
                     <div className="mb-4">
                       <div className="flex justify-between items-center mb-2">
-                        <p className="text-gray-700 font-medium text-sm">{loadingStep}</p>
-                        <span className="text-sm text-gray-500">{loadingProgress}%</span>
+                        <p className="text-gray-700 font-medium text-sm">
+                          {loadingStep}
+                        </p>
+                        <span className="text-sm text-gray-500">
+                          {loadingProgress}%
+                        </span>
                       </div>
                       <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div 
+                        <div
                           className="bg-gradient-to-r from-pink-500 to-purple-500 h-2 rounded-full transition-all duration-500 ease-out"
                           style={{ width: `${loadingProgress}%` }}
                         ></div>
                       </div>
                     </div>
-                    
+
                     <p className="text-gray-500 text-sm">
                       高品質な画像を生成しています...
                       <br />

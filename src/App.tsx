@@ -9,6 +9,168 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+// EXIFデータを読み取って画像を正しい向きに回転させる関数
+const getImageOrientation = (file: File): Promise<number> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const view = new DataView(e.target?.result as ArrayBuffer);
+      if (view.getUint16(0, false) !== 0xffd8) {
+        resolve(1);
+        return;
+      }
+      const length = view.byteLength;
+      let offset = 2;
+      while (offset < length) {
+        if (view.getUint16(offset + 2, false) <= 8) break;
+        const marker = view.getUint16(offset, false);
+        offset += 2;
+        if (marker === 0xffe1) {
+          if (view.getUint32(offset + 2, false) !== 0x45786966) {
+            resolve(1);
+            return;
+          }
+          const little = view.getUint16(offset + 6, false) === 0x4949;
+          const count = little
+            ? view.getUint32(offset + 20, false)
+            : view.getUint32(offset + 20, false);
+          offset += 24;
+          for (let i = 0; i < count; i++) {
+            if (offset + 12 > length) break;
+            const tag = little
+              ? view.getUint16(offset, false)
+              : view.getUint16(offset, false);
+            offset += 2;
+            const type = little
+              ? view.getUint16(offset, false)
+              : view.getUint16(offset, false);
+            offset += 2;
+            const count = little
+              ? view.getUint32(offset, false)
+              : view.getUint32(offset, false);
+            offset += 4;
+            if (tag === 0x0112) {
+              const orientation = little
+                ? view.getUint16(offset, false)
+                : view.getUint16(offset, false);
+              resolve(orientation);
+              return;
+            }
+            offset +=
+              count * (type === 1 ? 1 : type === 2 ? 1 : type === 3 ? 2 : 4);
+          }
+          break;
+        } else {
+          offset += 2;
+          if (view.getUint16(offset - 2, false) <= 8) break;
+        }
+      }
+      resolve(1);
+    };
+    reader.readAsArrayBuffer(file);
+  });
+};
+
+const rotateImage = (
+  canvas: HTMLCanvasElement,
+  orientation: number
+): HTMLCanvasElement => {
+  const ctx = canvas.getContext("2d")!;
+  const width = canvas.width;
+  const height = canvas.height;
+
+  if (orientation > 4 && orientation < 9) {
+    canvas.width = height;
+    canvas.height = width;
+  }
+
+  switch (orientation) {
+    case 2:
+      ctx.transform(-1, 0, 0, 1, width, 0);
+      break;
+    case 3:
+      ctx.transform(-1, 0, 0, -1, width, height);
+      break;
+    case 4:
+      ctx.transform(1, 0, 0, -1, 0, height);
+      break;
+    case 5:
+      ctx.transform(0, 1, 1, 0, 0, 0);
+      break;
+    case 6:
+      ctx.transform(0, 1, -1, 0, height, 0);
+      break;
+    case 7:
+      ctx.transform(0, -1, -1, 0, height, width);
+      break;
+    case 8:
+      ctx.transform(0, -1, 1, 0, 0, width);
+      break;
+    default:
+      break;
+  }
+
+  return canvas;
+};
+
+// 画像保存/共有ユーティリティ
+const dataUrlToBlob = (dataUrl: string): Blob => {
+  const parts = dataUrl.split(",");
+  const match = parts[0].match(/data:(.*?);base64/);
+  const mime = match ? match[1] : "image/png";
+  const binary = atob(parts[1]);
+  const length = binary.length;
+  const bytes = new Uint8Array(length);
+  for (let i = 0; i < length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+};
+
+const getBlobFromImageSource = async (src: string): Promise<Blob> => {
+  if (src.startsWith("data:")) {
+    return dataUrlToBlob(src);
+  }
+  const response = await fetch(src, { mode: "cors" });
+  return await response.blob();
+};
+
+const shareImageOrDownload = async (src: string, filename: string) => {
+  try {
+    const blob = await getBlobFromImageSource(src);
+    const file = new File([blob], filename, { type: blob.type || "image/png" });
+
+    type NavigatorShare = Navigator & {
+      canShare?: (data?: ShareData) => boolean;
+      share?: (data?: ShareData) => Promise<void>;
+    };
+    const nav: NavigatorShare = navigator as NavigatorShare;
+    const shareData: ShareData = {
+      files: [file],
+      title: "ヘアスタイル画像",
+      text: "保存または共有",
+    };
+    if (nav.canShare && nav.share && nav.canShare(shareData)) {
+      await nav.share(shareData);
+      return;
+    }
+  } catch {
+    // share失敗時はフォールバックへ
+  }
+
+  // フォールバック: ダウンロード試行
+  try {
+    const link = document.createElement("a");
+    link.href = src;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    return;
+  } catch {
+    // さらにフォールバック: 新規タブで開く（iOS Safariで長押し保存が可能）
+    window.open(src, "_blank");
+  }
+};
+
 interface CustomOption {
   value: string;
   label: string;
@@ -494,18 +656,46 @@ function App() {
   const [promptText, setPromptText] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = event.target.files?.[0];
     if (file) {
       // Fileオブジェクトを保存（API用）
       setSelectedImageFile(file);
 
-      // 表示用URLを作成
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setSelectedImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      // EXIFデータを読み取って画像を回転
+      const orientation = await getImageOrientation(file);
+
+      if (orientation > 1) {
+        // 回転が必要な場合
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext("2d")!;
+            ctx.drawImage(img, 0, 0);
+
+            // 回転処理
+            const rotatedCanvas = rotateImage(canvas, orientation);
+
+            // 回転後の画像を表示用URLとして設定
+            setSelectedImage(rotatedCanvas.toDataURL("image/jpeg", 0.9));
+          };
+          img.src = reader.result as string;
+        };
+        reader.readAsDataURL(file);
+      } else {
+        // 回転が不要な場合
+        const reader = new FileReader();
+        reader.onload = () => {
+          setSelectedImage(reader.result as string);
+        };
+        reader.readAsDataURL(file);
+      }
     }
   };
 
@@ -1100,7 +1290,8 @@ function App() {
                       <img
                         src={selectedImage}
                         alt="Original"
-                        className="h-32 mx-auto rounded-lg object-cover"
+                        className="max-h-32 max-w-full mx-auto rounded-lg object-contain"
+                        style={{ maxHeight: "128px", width: "auto" }}
                       />
                       <button
                         className="absolute top-1 right-1 bg-white bg-opacity-90 rounded-full p-1 hover:bg-red-500 hover:text-white shadow-sm"
@@ -1282,18 +1473,13 @@ function App() {
                       />
                       <div className="p-3 bg-white border-t border-gray-100">
                         <div className="flex justify-between items-center">
-                          <p className="text-sm font-medium text-gray-800">
-                            スタイル #{index + 1}
-                          </p>
                           <button
                             className="text-pink-500 hover:text-pink-600 flex items-center text-sm"
                             onClick={() => {
-                              const link = document.createElement("a");
-                              link.href = image;
-                              link.download = `hairstyle-${index + 1}.png`;
-                              document.body.appendChild(link);
-                              link.click();
-                              document.body.removeChild(link);
+                              shareImageOrDownload(
+                                image,
+                                `hairstyle-${index + 1}.png`
+                              );
                             }}
                           >
                             <Download className="w-4 h-4 mr-1" />

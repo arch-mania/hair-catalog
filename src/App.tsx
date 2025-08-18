@@ -692,19 +692,142 @@ function App() {
   const [promptText, setPromptText] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = event.target.files?.[0];
-    if (file) {
-      // Fileオブジェクトを保存（API用）
-      setSelectedImageFile(file);
+    if (!file) return;
 
-      // 表示用URLを作成
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setSelectedImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    // EXIFの向きを取得
+    let orientation: number | undefined;
+    try {
+      const exif = await exifr.parse(file, { pick: ["Orientation"] });
+      orientation = (exif?.Orientation as number | undefined) ?? undefined;
+    } catch {
+      orientation = undefined;
     }
+
+    const needsTransform = !!orientation && orientation !== 1;
+
+    // createImageBitmap が使える場合は優先
+    let imageBitmap: ImageBitmap | null = null;
+    try {
+      // 一部ブラウザで自動補正される
+      // @ts-expect-error: ImageBitmapOptions の型差異を許容
+      imageBitmap = await createImageBitmap(file, {
+        imageOrientation: "from-image",
+      });
+    } catch {
+      try {
+        imageBitmap = await createImageBitmap(file);
+      } catch {
+        imageBitmap = null;
+      }
+    }
+
+    if (!needsTransform) {
+      // 補正不要: そのまま表示・送信用に保存
+      const reader = new FileReader();
+      reader.onloadend = () => setSelectedImage(reader.result as string);
+      reader.readAsDataURL(file);
+      setSelectedImageFile(file);
+      return;
+    }
+
+    // 補正あり: キャンバスで正規化
+    const drawTransformed = async (
+      width: number,
+      height: number,
+      draw: (ctx: CanvasRenderingContext2D) => void
+    ) => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      // Orientationに応じてサイズ・変換を設定
+      switch (orientation) {
+        case 2:
+          canvas.width = width;
+          canvas.height = height;
+          ctx.translate(width, 0);
+          ctx.scale(-1, 1);
+          break;
+        case 3:
+          canvas.width = width;
+          canvas.height = height;
+          ctx.translate(width, height);
+          ctx.rotate(Math.PI);
+          break;
+        case 4:
+          canvas.width = width;
+          canvas.height = height;
+          ctx.translate(0, height);
+          ctx.scale(1, -1);
+          break;
+        case 5:
+          canvas.width = height;
+          canvas.height = width;
+          ctx.rotate(0.5 * Math.PI);
+          ctx.scale(1, -1);
+          break;
+        case 6:
+          canvas.width = height;
+          canvas.height = width;
+          ctx.rotate(0.5 * Math.PI);
+          ctx.translate(0, -height);
+          break;
+        case 7:
+          canvas.width = height;
+          canvas.height = width;
+          ctx.rotate(0.5 * Math.PI);
+          ctx.translate(width, -height);
+          ctx.scale(-1, 1);
+          break;
+        case 8:
+          canvas.width = height;
+          canvas.height = width;
+          ctx.rotate(-0.5 * Math.PI);
+          ctx.translate(-width, 0);
+          break;
+        default:
+          canvas.width = width;
+          canvas.height = height;
+      }
+
+      draw(ctx);
+
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      const normalizedFile = new File(
+        [blob],
+        file.name.replace(/\.[^.]+$/, "_normalized.jpg"),
+        { type: "image/jpeg", lastModified: Date.now() }
+      );
+
+      setSelectedImage(dataUrl);
+      setSelectedImageFile(normalizedFile);
+    };
+
+    if (imageBitmap) {
+      await drawTransformed(imageBitmap.width, imageBitmap.height, (ctx) => {
+        ctx.drawImage(imageBitmap as ImageBitmap, 0, 0);
+      });
+      return;
+    }
+
+    // Fallback: HTMLImageElement
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const img = new Image();
+      img.onload = async () => {
+        await drawTransformed(img.width, img.height, (ctx) => {
+          ctx.drawImage(img, 0, 0);
+        });
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
   };
 
   // プロンプト生成関数

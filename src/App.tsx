@@ -10,6 +10,203 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+// EXIFデータを読み取って画像を正しい向きに回転させる関数
+const getImageOrientation = (file: File): Promise<number> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const view = new DataView(e.target?.result as ArrayBuffer);
+      if (view.getUint16(0, false) !== 0xffd8) {
+        resolve(1);
+        return;
+      }
+      const length = view.byteLength;
+      let offset = 2;
+      while (offset < length) {
+        if (view.getUint16(offset + 2, false) <= 8) break;
+        const marker = view.getUint16(offset, false);
+        offset += 2;
+        if (marker === 0xffe1) {
+          if (view.getUint32(offset + 2, false) !== 0x45786966) {
+            resolve(1);
+            return;
+          }
+          const little = view.getUint16(offset + 6, false) === 0x4949;
+          const count = little
+            ? view.getUint32(offset + 20, false)
+            : view.getUint32(offset + 20, false);
+          offset += 24;
+          for (let i = 0; i < count; i++) {
+            if (offset + 12 > length) break;
+            const tag = little
+              ? view.getUint16(offset, false)
+              : view.getUint16(offset, false);
+            offset += 2;
+            const type = little
+              ? view.getUint16(offset, false)
+              : view.getUint16(offset, false);
+            offset += 2;
+            const count = little
+              ? view.getUint32(offset, false)
+              : view.getUint32(offset, false);
+            offset += 4;
+            if (tag === 0x0112) {
+              const orientation = little
+                ? view.getUint16(offset, false)
+                : view.getUint16(offset, false);
+              resolve(orientation);
+              return;
+            }
+            offset +=
+              count * (type === 1 ? 1 : type === 2 ? 1 : type === 3 ? 2 : 4);
+          }
+          break;
+        } else {
+          offset += 2;
+          if (view.getUint16(offset - 2, false) <= 8) break;
+        }
+      }
+      resolve(1);
+    };
+    reader.readAsArrayBuffer(file);
+  });
+};
+
+const rotateImage = (
+  canvas: HTMLCanvasElement,
+  orientation: number
+): HTMLCanvasElement => {
+  const ctx = canvas.getContext("2d")!;
+  const width = canvas.width;
+  const height = canvas.height;
+
+  if (orientation > 4 && orientation < 9) {
+    canvas.width = height;
+    canvas.height = width;
+  }
+
+  switch (orientation) {
+    case 2:
+      ctx.transform(-1, 0, 0, 1, width, 0);
+      break;
+    case 3:
+      ctx.transform(-1, 0, 0, -1, width, height);
+      break;
+    case 4:
+      ctx.transform(1, 0, 0, -1, 0, height);
+      break;
+    case 5:
+      ctx.transform(0, 1, 1, 0, 0, 0);
+      break;
+    case 6:
+      ctx.transform(0, 1, -1, 0, height, 0);
+      break;
+    case 7:
+      ctx.transform(0, -1, -1, 0, height, width);
+      break;
+    case 8:
+      ctx.transform(0, -1, 1, 0, 0, width);
+      break;
+    default:
+      break;
+  }
+
+  return canvas;
+};
+
+// 画像保存/共有ユーティリティ
+const dataUrlToBlob = (dataUrl: string): Blob => {
+  const parts = dataUrl.split(",");
+  const match = parts[0].match(/data:(.*?);base64/);
+  const mime = match ? match[1] : "image/png";
+  const binary = atob(parts[1]);
+  const length = binary.length;
+  const bytes = new Uint8Array(length);
+  for (let i = 0; i < length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+};
+
+const getBlobFromImageSource = async (src: string): Promise<Blob> => {
+  if (src.startsWith("data:")) {
+    return dataUrlToBlob(src);
+  }
+  try {
+    const response = await fetch(src, { mode: "cors" });
+    return await response.blob();
+  } catch {
+    // CORSで失敗した場合はno-corsでフォールバック（opaqueでも共有には十分な場合あり）
+    const response = await fetch(src, { mode: "no-cors" as RequestMode });
+    return await response.blob();
+  }
+};
+
+const shareImageOrDownload = async (src: string, filename: string) => {
+  try {
+    const blob = await getBlobFromImageSource(src);
+
+    // 適切な拡張子を自動付与
+    const mime = blob.type || "image/jpeg";
+    const ext = mime.includes("png") ? "png" : "jpg";
+    const safeName = /\.[a-zA-Z0-9]+$/.test(filename)
+      ? filename
+      : `${filename}.${ext}`;
+
+    const file = new File([blob], safeName, { type: mime });
+
+    type NavigatorShare = Navigator & {
+      canShare?: (data?: ShareData) => boolean;
+      share?: (data?: ShareData) => Promise<void>;
+    };
+    const nav: NavigatorShare = navigator as NavigatorShare;
+
+    // 1) 共有シート（ファイル付き）: iOS/Androidで「画像を保存」に直結（フォト保存可能）
+    const fileShare: ShareData = {
+      files: [file],
+      title: "ヘアスタイル画像",
+      text: "保存または共有",
+    };
+    if (nav.canShare && nav.share && nav.canShare(fileShare)) {
+      await nav.share(fileShare);
+      return;
+    }
+
+    // 2) 共有シート（URL）: 一部環境でfiles未対応
+    if (nav.share) {
+      // data: の場合はオブジェクトURLを使用
+      const urlToShare = src.startsWith("http")
+        ? src
+        : URL.createObjectURL(blob);
+      try {
+        await nav.share({ url: urlToShare, title: "ヘアスタイル画像" });
+        if (!src.startsWith("http")) URL.revokeObjectURL(urlToShare);
+        return;
+      } catch {
+        if (!src.startsWith("http")) URL.revokeObjectURL(urlToShare);
+        // 次のフォールバックへ
+      }
+    }
+
+    // 3) ダウンロード（ブラウザの仕様でフォトアプリ直保存不可の場合あり）
+    try {
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = safeName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+      return;
+    } catch {
+      // 4) 新規タブで開く（iOS Safariで長押し「写真に追加/画像を保存」可能）
+      window.open(src, "_blank");
+    }
+  } catch {
+    // どの手段も失敗した場合の最終フォールバック
+    window.open(src, "_blank");
+  }
+};
+
 interface CustomOption {
   value: string;
   label: string;
@@ -495,116 +692,19 @@ function App() {
   const [promptText, setPromptText] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file) return;
-
-    // EXIF Orientation を読み取り
-    let orientation: number | undefined;
-    try {
-      const exif = await exifr.parse(file, { pick: ["Orientation"] });
-      orientation = exif?.Orientation as number | undefined;
-    } catch {
-      orientation = undefined;
-    }
-
-    // 画像をImageBitmapとして読み込み（可能なら向き考慮）
-    let imageBitmap: ImageBitmap;
-    try {
-      // 一部ブラウザは from-image で自動補正
-      const createIB = createImageBitmap as (
-        blob: Blob,
-        options?: ImageBitmapOptions
-      ) => Promise<ImageBitmap>;
-      imageBitmap = await createIB(
-        file,
-        { imageOrientation: "from-image" } as unknown as ImageBitmapOptions
-      );
-    } catch {
-      imageBitmap = await createImageBitmap(file);
-    }
-
-    // Orientationが1(未回転)ならそのままDataURL化
-    const needsTransform = !!orientation && orientation !== 1;
-    if (!needsTransform) {
-      const reader = new FileReader();
-      reader.onloadend = () => setSelectedImage(reader.result as string);
-      reader.readAsDataURL(file);
+    if (file) {
+      // Fileオブジェクトを保存（API用）
       setSelectedImageFile(file);
-      return;
+
+      // 表示用URLを作成
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSelectedImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
     }
-
-    // Canvasで正規化（回転・反転を適用し、EXIF非依存の画像に）
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const { width, height } = imageBitmap;
-    // Orientationに応じてキャンバスサイズと変換を設定
-    switch (orientation) {
-      case 2: // horizontal flip
-        canvas.width = width;
-        canvas.height = height;
-        ctx.translate(width, 0);
-        ctx.scale(-1, 1);
-        break;
-      case 3: // 180°
-        canvas.width = width;
-        canvas.height = height;
-        ctx.translate(width, height);
-        ctx.rotate(Math.PI);
-        break;
-      case 4: // vertical flip
-        canvas.width = width;
-        canvas.height = height;
-        ctx.translate(0, height);
-        ctx.scale(1, -1);
-        break;
-      case 5: // transpose
-        canvas.width = height;
-        canvas.height = width;
-        ctx.rotate(0.5 * Math.PI);
-        ctx.scale(1, -1);
-        break;
-      case 6: // 90° rotate right
-        canvas.width = height;
-        canvas.height = width;
-        ctx.rotate(0.5 * Math.PI);
-        ctx.translate(0, -height);
-        break;
-      case 7: // transverse
-        canvas.width = height;
-        canvas.height = width;
-        ctx.rotate(0.5 * Math.PI);
-        ctx.translate(width, -height);
-        ctx.scale(-1, 1);
-        break;
-      case 8: // 90° rotate left
-        canvas.width = height;
-        canvas.height = width;
-        ctx.rotate(-0.5 * Math.PI);
-        ctx.translate(-width, 0);
-        break;
-      default:
-        canvas.width = width;
-        canvas.height = height;
-    }
-
-    ctx.drawImage(imageBitmap, 0, 0);
-
-    // JPEGにエンコードしてEXIFを取り除く（正規化画像）
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-
-    // API送信用にBlob→Fileへ変換して保持（EXIFなし・回転適用済み）
-    const res = await fetch(dataUrl);
-    const blob = await res.blob();
-    const normalizedFile = new File([blob], file.name.replace(/\.[^.]+$/, "_normalized.jpg"), {
-      type: "image/jpeg",
-      lastModified: Date.now(),
-    });
-
-    setSelectedImage(dataUrl);
-    setSelectedImageFile(normalizedFile);
   };
 
   // プロンプト生成関数
@@ -1058,6 +1158,51 @@ function App() {
                 ヘアスタイルをカスタマイズ
               </h2>
 
+              {/* 画像アップロード */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  元の画像
+                </label>
+                <div
+                  className="border border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-pink-500 transition-colors bg-gray-50"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {selectedImage ? (
+                    <div className="relative">
+                      <img
+                        src={selectedImage}
+                        alt="Original"
+                        className="max-h-32 max-w-full mx-auto rounded-lg object-contain"
+                        style={{ maxHeight: "128px", width: "auto" }}
+                      />
+                      <button
+                        className="absolute top-1 right-1 bg-white bg-opacity-90 rounded-full p-1 hover:bg-red-500 hover:text-white shadow-sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedImage(null);
+                          setSelectedImageFile(null);
+                        }}
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Upload className="w-8 h-8 mx-auto text-gray-400" />
+                      <p className="text-gray-500 text-sm">
+                        クリックして画像をアップロード
+                      </p>
+                    </div>
+                  )}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="hidden"
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                  />
+                </div>
+              </div>
               {/* 髪色選択 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-3">
@@ -1183,51 +1328,6 @@ function App() {
                 selectedValue={lighting}
                 onSelect={setLighting}
               />
-
-              {/* 画像アップロード */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  元の画像
-                </label>
-                <div
-                  className="border border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-pink-500 transition-colors bg-gray-50"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  {selectedImage ? (
-                    <div className="relative">
-                      <img
-                        src={selectedImage}
-                        alt="Original"
-                        className="h-32 mx-auto rounded-lg object-cover"
-                      />
-                      <button
-                        className="absolute top-1 right-1 bg-white bg-opacity-90 rounded-full p-1 hover:bg-red-500 hover:text-white shadow-sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedImage(null);
-                          setSelectedImageFile(null);
-                        }}
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <Upload className="w-8 h-8 mx-auto text-gray-400" />
-                      <p className="text-gray-500 text-sm">
-                        クリックして画像をアップロード
-                      </p>
-                    </div>
-                  )}
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    className="hidden"
-                    accept="image/*"
-                    onChange={handleImageUpload}
-                  />
-                </div>
-              </div>
 
               {/* GPT Image 1 設定 */}
               <div className="border-t pt-4">
@@ -1380,18 +1480,13 @@ function App() {
                       />
                       <div className="p-3 bg-white border-t border-gray-100">
                         <div className="flex justify-between items-center">
-                          <p className="text-sm font-medium text-gray-800">
-                            スタイル #{index + 1}
-                          </p>
                           <button
                             className="text-pink-500 hover:text-pink-600 flex items-center text-sm"
                             onClick={() => {
-                              const link = document.createElement("a");
-                              link.href = image;
-                              link.download = `hairstyle-${index + 1}.png`;
-                              document.body.appendChild(link);
-                              link.click();
-                              document.body.removeChild(link);
+                              shareImageOrDownload(
+                                image,
+                                `hairstyle-${index + 1}.png`
+                              );
                             }}
                           >
                             <Download className="w-4 h-4 mr-1" />

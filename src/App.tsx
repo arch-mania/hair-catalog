@@ -1,7 +1,15 @@
 import React, { useState, useRef } from "react";
 import * as exifr from "exifr";
-import { Upload, X, RefreshCw, Scissors, Download } from "lucide-react";
+import {
+  Upload,
+  X,
+  RefreshCw,
+  Scissors,
+  Download,
+  Palette,
+} from "lucide-react";
 import OpenAI from "openai";
+import { HexColorPicker } from "react-colorful";
 import {
   Select,
   SelectContent,
@@ -11,6 +19,7 @@ import {
 } from "@/components/ui/select";
 
 // EXIFデータを読み取って画像を正しい向きに回転させる関数
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const getImageOrientation = (file: File): Promise<number> => {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -72,6 +81,7 @@ const getImageOrientation = (file: File): Promise<number> => {
   });
 };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const rotateImage = (
   canvas: HTMLCanvasElement,
   orientation: number
@@ -219,6 +229,13 @@ interface BadgeSelectionProps {
   onSelect: (value: string) => void;
 }
 
+interface MultiBadgeSelectionProps {
+  label: string;
+  options: CustomOption[];
+  selectedValues: string[];
+  onSelect: (values: string[]) => void;
+}
+
 interface GPTImageEditParams {
   model: string;
   image: File;
@@ -276,6 +293,14 @@ const hairLengthOptions: CustomOption[] = [
   { value: "short bob cut", label: "ショートボブ" },
   { value: "short hair", label: "ショート" },
   { value: "very short hair", label: "ベリーショート" },
+];
+
+// 毛量
+const hairVolumeOptions: CustomOption[] = [
+  { value: "", label: "設定しない" },
+  { value: "low hair volume", label: "少ない" },
+  { value: "normal hair volume", label: "普通" },
+  { value: "high hair volume", label: "多い" },
 ];
 
 // シルエット
@@ -644,6 +669,62 @@ const BadgeSelection: React.FC<BadgeSelectionProps> = ({
   );
 };
 
+// Multi Badge Selection Component
+const MultiBadgeSelection: React.FC<MultiBadgeSelectionProps> = ({
+  label,
+  options,
+  selectedValues,
+  onSelect,
+}) => {
+  const handleToggle = (value: string) => {
+    if (value === "") {
+      // "指定なし"が選択された場合、すべてクリア
+      onSelect([]);
+    } else {
+      if (selectedValues.includes(value)) {
+        // 既に選択されている場合は削除
+        onSelect(selectedValues.filter((v) => v !== value));
+      } else {
+        // 選択されていない場合は追加
+        onSelect([...selectedValues, value]);
+      }
+    }
+  };
+
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-3">
+        {label}
+      </label>
+      <div className="flex flex-wrap gap-2">
+        {options.map((option) => {
+          const isSelected = selectedValues.includes(option.value);
+          const isDefault = option.value === "";
+          const isNothingSelected = selectedValues.length === 0;
+
+          return (
+            <button
+              key={option.value}
+              onClick={() => handleToggle(option.value)}
+              className={`px-3 py-2 rounded-full text-sm font-medium transition-all duration-200 border ${
+                isSelected || (isDefault && isNothingSelected)
+                  ? isDefault
+                    ? "bg-gray-100 text-gray-700 border-gray-300 ring-2 ring-gray-400"
+                    : "bg-gradient-to-r from-pink-500 to-purple-500 text-white border-transparent shadow-md"
+                  : isDefault
+                  ? "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
+                  : "bg-white text-gray-700 border-gray-200 hover:border-pink-300 hover:bg-pink-50 hover:text-pink-700"
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 // OpenAI 設定
 const getOpenAIClient = () => {
   const apiKey =
@@ -673,13 +754,18 @@ function App() {
 
   // 8つの新しいカテゴリーの状態
   const [hairLength, setHairLength] = useState("");
+  const [hairVolume, setHairVolume] = useState("");
   const [silhouette, setSilhouette] = useState("");
   const [perm, setPerm] = useState(""); // デフォルト: なし
   const [hairMovement, setHairMovement] = useState("");
-  const [texture, setTexture] = useState("");
+  const [texture, setTexture] = useState<string[]>([]);
   const [hairQuality, setHairQuality] = useState("");
   const [layers, setLayers] = useState("");
   const [lighting, setLighting] = useState("");
+
+  // カラーピッカー関連
+  const [useCustomColor, setUseCustomColor] = useState(false);
+  const [customColor, setCustomColor] = useState("#8B4513");
 
   // GPT Image 1新パラメータ
   const [imageQuality, setImageQuality] = useState("high");
@@ -836,10 +922,14 @@ function App() {
 
     // 選択されたオプションのみを使用
     if (hairLength) styleParts.push(hairLength);
+    if (hairVolume) styleParts.push(hairVolume);
     if (silhouette) styleParts.push(silhouette);
     if (perm) styleParts.push(perm);
     if (hairMovement) styleParts.push(hairMovement);
-    if (texture) styleParts.push(texture);
+    // 複数の質感を結合
+    if (texture.length > 0) {
+      styleParts.push(...texture);
+    }
     if (hairQuality) styleParts.push(hairQuality);
     if (layers) styleParts.push(layers);
     if (lighting) styleParts.push(lighting);
@@ -1334,14 +1424,15 @@ function App() {
 
                 {/* ベースカラートグル */}
                 <div className="mb-4">
-                  <div className="flex items-center space-x-4 bg-gray-50 p-2 rounded-lg">
+                  <div className="flex items-center space-x-2 bg-gray-50 p-2 rounded-lg">
                     <button
                       className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        isBlackBase
+                        !useCustomColor && isBlackBase
                           ? "bg-pink-500 text-white"
                           : "bg-white text-gray-700 hover:bg-gray-100"
                       }`}
                       onClick={() => {
+                        setUseCustomColor(false);
                         setIsBlackBase(true);
                         setSelectedColorCode("");
                       }}
@@ -1350,19 +1441,80 @@ function App() {
                     </button>
                     <button
                       className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        !isBlackBase
+                        !useCustomColor && !isBlackBase
                           ? "bg-pink-500 text-white"
                           : "bg-white text-gray-700 hover:bg-gray-100"
                       }`}
                       onClick={() => {
+                        setUseCustomColor(false);
                         setIsBlackBase(false);
                         setSelectedColorCode("");
                       }}
                     >
                       ブリーチベース
                     </button>
+                    <button
+                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1 ${
+                        useCustomColor
+                          ? "bg-pink-500 text-white"
+                          : "bg-white text-gray-700 hover:bg-gray-100"
+                      }`}
+                      onClick={() => {
+                        setUseCustomColor(true);
+                        setSelectedColorCode(customColor);
+                      }}
+                    >
+                      <Palette className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
+
+                {/* カスタムカラーピッカー */}
+                {useCustomColor && (
+                  <div className="mb-4 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                    <div className="flex flex-col md:flex-row gap-4 items-start">
+                      <div className="flex-shrink-0">
+                        <HexColorPicker
+                          color={customColor}
+                          onChange={(color) => {
+                            setCustomColor(color);
+                            setSelectedColorCode(color);
+                          }}
+                          style={{ width: "200px", height: "150px" }}
+                        />
+                      </div>
+                      <div className="flex-1 space-y-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            カラーコード
+                          </label>
+                          <input
+                            type="text"
+                            value={customColor}
+                            onChange={(e) => {
+                              const color = e.target.value;
+                              if (/^#[0-9A-Fa-f]{6}$/.test(color)) {
+                                setCustomColor(color);
+                                setSelectedColorCode(color);
+                              }
+                            }}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                            placeholder="#8B4513"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="w-8 h-8 rounded border border-gray-300"
+                            style={{ backgroundColor: customColor }}
+                          ></div>
+                          <span className="text-sm text-gray-600">
+                            プレビュー
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* 選択されたカラー情報 */}
                 {selectedColorCode && (
@@ -1379,13 +1531,20 @@ function App() {
                         <span className="text-pink-700">
                           {selectedColorCode}
                         </span>
+                        {useCustomColor && (
+                          <span className="text-xs text-gray-500">
+                            (カスタム)
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
                 )}
 
                 {/* カラーチャート */}
-                <div className="overflow-x-auto">{renderColorChart()}</div>
+                {!useCustomColor && (
+                  <div className="overflow-x-auto">{renderColorChart()}</div>
+                )}
               </div>
 
               {/* 髪の長さ選択 */}
@@ -1394,6 +1553,14 @@ function App() {
                 options={hairLengthOptions}
                 selectedValue={hairLength}
                 onSelect={setHairLength}
+              />
+
+              {/* 毛量選択 */}
+              <BadgeSelection
+                label="毛量"
+                options={hairVolumeOptions}
+                selectedValue={hairVolume}
+                onSelect={setHairVolume}
               />
 
               {/* シルエット選択 */}
@@ -1421,10 +1588,10 @@ function App() {
               />
 
               {/* 質感選択 */}
-              <BadgeSelection
+              <MultiBadgeSelection
                 label="質感"
                 options={textureOptions}
-                selectedValue={texture}
+                selectedValues={texture}
                 onSelect={setTexture}
               />
 
